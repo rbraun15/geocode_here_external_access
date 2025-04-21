@@ -7,6 +7,8 @@ Once logged in go to REST APIs > Go To Access Manager or just click link
 Click Create new app > give it a name > click Create app
 Click Create API key
 Copy newly created API key it will be used further down 
+    search for replace_with_your_api_key and swap it with
+    your newly created API key
 */
 ------------------------------------------------------
 
