@@ -1,8 +1,8 @@
 # Geocoding with Snowflake and External API
 
-## This document shows how to set up External Access in Snowflake so you can reach out to an external API for geocoding.
+## This example shows how to set up External Access in Snowflake so you can reach out to an external API for geocoding.
 
-This document will cover:
+This example covers:
 - Here.com trial account creation
 - Network Rule and External Access Integration setup
 - Simple one record test
