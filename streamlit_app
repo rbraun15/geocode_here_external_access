@@ -1,0 +1,321 @@
+ 
+# Let's see a H3 map of our data, we chose a level of 5, update as appropriate or make it dynamic
+# Hover over a cell and see the number of expired registrations
+#
+
+# ------------------------------------------------------------
+# api key for geocode is no longer valid - 
+# ------------------------------------------------------------
+import streamlit as st
+import pandas as pd
+import pydeck as pdk
+import numpy as np
+
+
+# We can also use Snowpark for our analyses!
+from snowflake.snowpark.context import get_active_session
+session = get_active_session()
+
+
+
+ 
+st.write("")
+#st.write("Alumni Locator")
+#st.write("DHS & MV - Expired Registrations")
+st.write("")
+
+
+
+use_case_options = {
+
+"Alumni Locator",
+"College Fair  - Recruitment Map",
+"Provider Locator",    
+"View Expired Registrations",
+"Traffic Planning",
+"Donor Targeting",
+"Location Planning"
+}
+
+sorted_use_case_options = sorted(use_case_options)
+
+
+# Create the selectbox
+selected_use_case = st.sidebar.selectbox("Select a Use Case", list(sorted_use_case_options))
+#st.write("Selected Use Case:", selected_use_case)
+
+
+
+import streamlit as st
+
+st.markdown( """<style>.big-font {font-size:30px !important;}</style>""",unsafe_allow_html=True)
+st.markdown(f'<p class="big-font"> <span style="color: #4169e1;">{selected_use_case}</span></p>', unsafe_allow_html=True)
+
+
+st.write("")
+st.write("")
+# -------------------------------------------------------------------------------------
+# Filter for city center
+# -------------------------------------------------------------------------------------
+
+# Sidebar filter for the number of stations
+#MILES_AWAY = st.sidebar.number_input("Distance away (miles):", min_value=1, max_value=10, step=1, value=1)
+
+col2, col1 = st.columns(2)
+
+with col1:
+    MILES_AWAY_NUM = st.number_input("Distance away (miles):", min_value=1, max_value=10, step=1, value=1)
+
+
+city_coordinates = {
+    "Jacksonville": (-81.6557,30.3322),
+    "Orlando": (-81.3789,28.5384),
+    "Tallahassee": (-84.2806,30.4382)
+}
+
+#with col2:
+#    selected_city = st.selectbox(
+#    "Select a city:",
+#    options=list(city_coordinates.keys())  # The dropdown options (city names)
+#)
+
+with col2:
+# locations query   
+    location_dropdown_query=f""" select address_description, access_lng, access_lat from here_json_tbls order by address_description; """
+    location_dropdown_query_df=session.sql(location_dropdown_query).to_pandas()
+    location_dropdown_selected = st.selectbox('Select a Location', options=location_dropdown_query_df['ADDRESS_DESCRIPTION'],)
+    selected_location = location_dropdown_query_df[location_dropdown_query_df['ADDRESS_DESCRIPTION'] == location_dropdown_selected]
+    selected_lon = selected_location['ACCESS_LNG'].values[0]
+    selected_lat = selected_location['ACCESS_LAT'].values[0]
+    #st.write(selected_lon)
+    #st.write(selected_lat)
+ 
+
+
+
+
+# get radius - slider - 
+#my_range = range(100,800)
+# get_radius_value = st.select_slider("Resize Map Points", options=my_range, value =100)
+
+# Create a slider with the specified parameters
+
+
+get_radius_value = st.sidebar.slider(
+    "Slide to Resize Map Points",  # Slider label
+    min_value=100,      # Minimum value
+    max_value=800,     # Maximum value
+    value=100,          # Default value
+    step=100            # Increment step
+)
+
+
+get_opacity_value = st.sidebar.slider(
+    "Slide to Define Opacity",  # Slider label
+    min_value=.1,      # Minimum value
+    max_value=1.0,     # Maximum value
+    value=.1,          # Default value
+    step=.1            # Increment step
+)
+
+
+
+# Define color options and their RGB values
+color_options = {
+    "orange": [255, 165, 0],
+    "red": [255, 0, 0],
+    "blue": [0, 0, 255],
+    "green": [0, 255, 0],
+}
+
+# Create a selectbox to choose the color
+selected_color_name = st.sidebar.selectbox("Select Map Point Color", list(color_options.keys()))
+
+# Get the RGB value of the selected color
+selected_color_rgb = color_options[selected_color_name]
+
+
+
+
+
+# Get the lat/long from the dictionary based on the selected city
+# uncomment below to use static dataframe
+#selected_lon, selected_lat = city_coordinates[selected_city]
+
+
+
+
+
+ 
+map_locations_query = f"""
+with POINTS as (
+SELECT 
+  ST_MAKEPOINT(LONGITUDE, LATITUDE) as VEHICLE_LOCATION_POINT,
+  ST_MAKEPOINT({selected_lon},{selected_lat}) as FIELD_OFFICE_POINT , 
+  VIN,
+  NUMBER || ' ' || STREET || ' ' || CITY || ', ' || STATE || ' ' || ZIP as ADDRESS,
+  LATITUDE,
+  LONGITUDE,
+  ZIP,
+  cast(REGISTRATION_EXPIRATION as string) as REGISTRATION_EXPIRATION_STR
+FROM 
+     SILVER.HIGHWAY_SAFETY_GEO
+     )
+ 
+-- Select against CTE
+SELECT 
+  VIN,
+  ADDRESS,  
+  ST_DWITHIN(VEHICLE_LOCATION_POINT, FIELD_OFFICE_POINT , ({MILES_AWAY_NUM}*1609.34)) AS WITHIN_RANGE,
+  ST_DISTANCE(VEHICLE_LOCATION_POINT, FIELD_OFFICE_POINT )/1609.34 AS MILES_AWAY,
+  LATITUDE,
+  LONGITUDE,
+  ZIP,
+  REGISTRATION_EXPIRATION_STR
+FROM 
+  POINTS
+WHERE
+  ST_DISTANCE(VEHICLE_LOCATION_POINT, FIELD_OFFICE_POINT ) < ({MILES_AWAY_NUM}*1609.34) and 
+  VIN is not NULL;
+ """
+
+
+
+# Query to get my map points
+#map_locations_query = f"""select LONGITUDE, LATITUDE , VIN , ZIP, cast(REGISTRATION_EXPIRATION as string) as REGISTRATION_EXPIRATION_STR from FL_DHS_MV.SILVER.HIGHWAY_SAFETY_GEO where REGISTRATION_EXPIRATION < CURRENT_DATE"""
+map_locations_query_df = session.sql(map_locations_query).to_pandas()
+map_locations_query_col = session.sql(map_locations_query).collect()
+
+
+
+# Define my map layer off above dataframe
+map_locations_layer = pdk.Layer(
+    type='ScatterplotLayer', 
+    data=map_locations_query_df, 
+    pickable=True,
+    get_position='[LONGITUDE, LATITUDE]', 
+    #get_color='[215,21,99]',
+    #get_color='[0,0,255]',
+    get_color=selected_color_rgb,
+    # get_color='[128,0,128,200]',   
+    #get_radius=100,
+    get_radius=get_radius_value,
+    #opacity=1,
+    opacity=get_opacity_value,
+    auto_highlight=True,
+    id = 'map_locations_id' 
+)
+
+
+# Calcualte average to set centerpoint of map, leverages above dataframe
+avg_latitude = map_locations_query_df['LATITUDE'].mean()
+avg_longitude = map_locations_query_df['LONGITUDE'].mean()
+
+
+# Define tooltip, to provide details on points
+tooltip = {
+        "html": 
+                "<b>VIN:</b> {VIN} <br/>"
+                "<b>Registration Expiration:</b> {REGISTRATION_EXPIRATION_STR} <br/>"
+                "<b>ZIP:</b> {ZIP}",
+            "style": {
+                    "backgroundColor": 'rgba(128, 0, 128, 0.5)',
+                    "color": "white"}}
+
+
+
+
+# mapbox API key
+mbkey = ''
+
+# define map details - layers, map provider, initial state, tooltip
+deck_all_layers = pdk.Deck(
+        map_provider = 'mapbox',
+        api_keys = {"mapbox":mbkey},
+        map_style = 'mapbox://styles/mapbox/light-v11',
+        layers=[
+             map_locations_layer
+               ], 
+        tooltip = tooltip,
+        initial_view_state=pdk.ViewState(
+        latitude=avg_latitude,
+        longitude=avg_longitude,
+        zoom=11,
+        pitch=30
+        )
+        )
+
+# display the map
+st.pydeck_chart(deck_all_layers)
+
+# Geo Code
+# ------------------------------------------
+
+st.write(" ")
+st.write(" ")
+st.write(" ")
+st.write(" ")
+st.write(" ")
+st.write(" ")
+st.write(" ")
+#form = st.form(key="annotation", clear_on_submit=True)
+
+with st.form("my_form", clear_on_submit=True):
+    st.write("Add New Location To Select Box")
+    input_address_descriptor = st.text_input("Enter description for address")
+    input_address = st.text_input("Enter address")
+  #  slider_val = st.slider("Form slider")
+  #  checkbox_val = st.checkbox("Form checkbox")
+
+    # Every form must have a submit button.
+    submitted = st.form_submit_button("Submit")
+    if submitted:
+        
+        qeo_code_query=f"""
+insert into here_json_tbls (access_lat, access_lng, address_house_number, address_street, address_city, address_state, address_state_code, address_postalcode, address_county, address_description) 
+with parsed_json as (select parse_json(get_url('https://geocode.search.hereapi.com/v1/geocode?q={input_address}&apiKey=TPl1vI1XSbCa_Zu3Q323g1OfSLvjYpjKop1KPYbunmc'))::variant data)
+SELECT
+    f.value:access[0].lat::float AS access_lat,
+    f.value:access[0].lng::float AS access_lng,
+    f.value:address.houseNumber::STRING AS address_house_number,
+    f.value:address.street::STRING AS address_street,
+    f.value:address.city::STRING AS address_city,
+    f.value:address.state::STRING AS address_state,
+    f.value:address.stateCode::STRING AS address_state_code,
+    f.value:address.postalCode::STRING AS address_postalcode,
+    f.value:address.county::STRING AS address_county,
+    '{input_address_descriptor}' as address_description
+FROM
+    parsed_json, LATERAL FLATTEN(input => data:items) f;
+"""
+        #st.write("slider", slider_val, "checkbox", checkbox_val)
+        qeo_code_query_df = session.sql(qeo_code_query)
+        # code below is for a selcect, does not make sense to use for an insert
+        #qeo_code_query_df = session.sql(qeo_code_query).to_pandas()
+        st.write(qeo_code_query_df)
+        st.rerun()
+        #st.fragment
+        #st.rerun(scope="fragment")
+        
+   
+        
+#st.write("Outside the form")
+see_records_df=session.sql("select * from here_json_tbls").to_pandas()
+st.write(see_records_df)
+st.write(map_locations_query_df)
+
+#st.write(avg_latitude)
+#st.write(avg_longitude)
+
+#st.write(map_locations_layer)
+
+#st.write(input_address)
+#qeo_code_query=f"""
+#select get_url('https://geocode.search.hereapi.com/v1/geocode?q={input_address}&apiKey=TPl1vI1XSbCa_Zu3Q323g1OfSLvjYpjKop1KPYbunmc')
+#"""
+
+
+
+
+ 
+
